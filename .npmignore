@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+
+# Development files
+tests/
+*.test.js
+
+# Documentation (already included in files field)
+*.md
+!readme.md
+!SECURITY.md
+
+# Configuration files
+.gitignore
+.eslintrc.*
+.prettierrc.*
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+
+# Database files (will be created at runtime)
+data/thoughts.db
+data/thoughts.db-*
+
+# Temporary files
+tmp/
+temp/

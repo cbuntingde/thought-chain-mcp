@@ -1,0 +1,60 @@
+{
+  "name": "thought-chain-mcp",
+  "version": "1.1.0",
+  "description": "MCP Server for Thought Chain with persistence - Installable via npx",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "test": "node --test",
+    "lint": "echo 'No linter configured'",
+    "security-check": "npm audit",
+    "postinstall": "echo '✅ Thought Chain MCP Server installed successfully! Use npx thought-chain-mcp to run'"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@vscode/webview-ui-toolkit": "^1.4.0",
+    "better-sqlite3": "^12.4.1"
+  },
+  "bin": {
+    "thought-chain-mcp": "index.js",
+    "thought-chain": "index.js"
+  },
+  "keywords": [
+    "mcp",
+    "thinking",
+    "reasoning",
+    "ai",
+    "security",
+    "modular",
+    "npx",
+    "model-context-protocol",
+    "thought-chain",
+    "persistence",
+    "database"
+  ],
+  "files": [
+    "index.js",
+    "src/",
+    "readme.md",
+    "SECURITY.md",
+    "package.json"
+  ],
+  "author": "Chris Bunting <cbunting99@gmail.com>",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cbuntingde/thought-chain-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cbuntingde/thought-chain-mcp/issues"
+  },
+  "homepage": "https://github.com/cbuntingde/thought-chain-mcp#readme",
+  "publishConfig": {
+    "access": "public"
+  }
+}
