@@ -1,15 +1,15 @@
 /**
  * Copyright 2025 Chris Bunting <cbunting99@gmail.com>
  * All rights reserved.
- * 
+ *
  * File: server.test.js
  * Description: Test suite for the Thought Chain MCP Server
  */
 
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { ThoughtChainServer } from '../src/server.js';
-import { validateToolArguments, createThoughtChain, createThoughtStep } from '../src/models.js';
+import { ThoughtChainServer, RateLimiter } from '../src/server.js';
+import { validateToolArguments, createThoughtChain, createThoughtStep, generateId } from '../src/models.js';
 import { DatabaseManager } from '../src/database.js';
 import { handleSequentialThink, handleRecallThoughts, handleLoadThoughtChain, handleGetStats } from '../src/handlers.js';
 
@@ -137,7 +137,7 @@ describe('Thought Chain Server Tests', () => {
       chain.steps.push(createThoughtStep(2, 'Test thought 2', 'Test reflection'));
 
       testDb.saveThought(chain);
-      
+
       const retrieved = testDb.getThoughtChain('test-chain-1');
       assert(retrieved !== null);
       assert.strictEqual(retrieved.id, 'test-chain-1');
@@ -149,7 +149,7 @@ describe('Thought Chain Server Tests', () => {
     test('should search thought chains', () => {
       const chain1 = createThoughtChain('search-test-1');
       chain1.steps.push(createThoughtStep(1, 'This is about programming'));
-      
+
       const chain2 = createThoughtChain('search-test-2');
       chain2.steps.push(createThoughtStep(1, 'This is about cooking'));
 
@@ -182,7 +182,7 @@ describe('Thought Chain Server Tests', () => {
 
     test('should handle add_step action', async () => {
       const currentChain = createThoughtChain();
-      
+
       const result = await handleSequentialThink({
         action: 'add_step',
         thought: 'This is a test step',
@@ -207,7 +207,7 @@ describe('Thought Chain Server Tests', () => {
 
     test('should handle get_stats', async () => {
       const result = await handleGetStats();
-      
+
       assert.strictEqual(result.content[0].type, 'text');
       assert(result.content[0].text.includes('Database Statistics'));
     });
@@ -254,7 +254,12 @@ describe('Thought Chain Server Tests', () => {
         '../../../etc/passwd',
         'SELECT * FROM users',
         '<script>alert("xss")</script>',
-        'chain@id#with$special%chars'
+        'chain@id#with$special%chars',
+        'path/to/somewhere',
+        '..\\windows\\system32',
+        'chain id with spaces',
+        'chain\nid\nwith\nnewlines',
+        'a'.repeat(101) // Too long
       ];
 
       invalidIds.forEach(id => {
@@ -262,15 +267,126 @@ describe('Thought Chain Server Tests', () => {
           validateToolArguments('load_thought_chain', {
             chain_id: id
           });
+        }, /invalid characters|invalid length/);
+      });
+    });
+
+    test('should prevent SQL injection patterns', () => {
+      const injectionPayloads = [
+        "' OR '1'='1",
+        "'; DROP TABLE users; --",
+        "' UNION SELECT * FROM users --",
+        "1' AND (SELECT COUNT(*) FROM users) > 0 --",
+        "'; UPDATE thought_chains SET status = 'compromised'; --",
+        "' || 'malicious' || '",
+        "' AND 1=1#",
+        "' OR 1=1--"
+      ];
+
+      injectionPayloads.forEach(payload => {
+        assert.throws(() => {
+          validateToolArguments('thought_chain', {
+            action: 'add_step',
+            thought: payload
+          });
+        }, /dangerous patterns/);
+      });
+    });
+
+    test('should prevent control characters', () => {
+      const controlCharPayloads = [
+        'Test\x00thought',
+        'Thought\x1Fwith\x7Fcontrol chars',
+        'Test\r\nexploit',
+        'Test\t\t\ttabs',
+        'Test\u0000null byte'
+      ];
+
+      controlCharPayloads.forEach(payload => {
+        assert.throws(() => {
+          validateToolArguments('thought_chain', {
+            action: 'add_step',
+            thought: payload
+          });
+        }, /invalid characters/);
+      });
+    });
+
+    test('should validate query parameters for search', () => {
+      const dangerousQueries = [
+        '<script>alert("xss")</script>',
+        "'; DROP TABLE thought_chains; --",
+        '../../../etc/passwd',
+        'query with\x00null byte',
+        'query>greater<than'
+      ];
+
+      dangerousQueries.forEach(query => {
+        assert.throws(() => {
+          validateToolArguments('recall_thoughts', {
+            query: query
+          });
         }, /invalid characters/);
       });
     });
   });
 
+  describe('Rate Limiting Tests', () => {
+    test('should implement rate limiting', async () => {
+      // This test would require modifying the server to expose rate limiting
+      // For now, we'll test the rate limiter functionality directly
+
+      // Create a rate limiter with low limits for testing
+      const limiter = new RateLimiter(2, 1000); // 2 requests per second
+      const clientId = 'test-client';
+
+      // First request should be allowed
+      assert.strictEqual(limiter.isAllowed(clientId), true);
+
+      // Second request should be allowed
+      assert.strictEqual(limiter.isAllowed(clientId), true);
+
+      // Third request should be denied
+      assert.strictEqual(limiter.isAllowed(clientId), false);
+
+      // Wait and test cleanup
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      limiter.cleanup();
+
+      // Should be allowed again after cleanup
+      assert.strictEqual(limiter.isAllowed(clientId), true);
+    });
+  });
+
+  describe('Secure ID Generation Tests', () => {
+    test('should generate cryptographically secure IDs', () => {
+
+      const id1 = generateId();
+      const id2 = generateId();
+
+      // IDs should be different
+      assert.notStrictEqual(id1, id2);
+
+      // IDs should be 32 characters (16 bytes in hex)
+      assert.strictEqual(id1.length, 32);
+      assert.strictEqual(id2.length, 32);
+
+      // IDs should only contain hex characters
+      assert(/^[0-9a-f]{32}$/.test(id1));
+      assert(/^[0-9a-f]{32}$/.test(id2));
+
+      // Generate multiple IDs to ensure uniqueness
+      const ids = new Set();
+      for (let i = 0; i < 100; i++) {
+        ids.add(generateId());
+      }
+      assert.strictEqual(ids.size, 100, 'All generated IDs should be unique');
+    });
+
   describe('Error Handling Tests', () => {
     test('should handle missing thought for add_step', async () => {
       const currentChain = createThoughtChain();
-      
+
       await assert.rejects(async () => {
         await handleSequentialThink({
           action: 'add_step'
@@ -282,7 +398,7 @@ describe('Thought Chain Server Tests', () => {
 
     test('should handle missing thought for conclude', async () => {
       const currentChain = createThoughtChain();
-      
+
       await assert.rejects(async () => {
         await handleSequentialThink({
           action: 'conclude'
