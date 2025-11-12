@@ -1,6 +1,6 @@
 {
   "name": "thought-chain-mcp",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "MCP Server for Thought Chain with persistence - Installable via npx",
   "main": "index.js",
   "type": "module",
