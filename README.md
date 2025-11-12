@@ -5,6 +5,10 @@ All rights reserved.
 File: readme.md
 Description: Comprehensive documentation for the Sequential Thinking MCP Server
 -->
+<a href="https://glama.ai/mcp/servers/@cbuntingde/thought-chain-mcp">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/@cbuntingde/thought-chain-mcp/badge" alt="Thought Chain MCP server" />
+</a>
+
 
 # 🧠 Thought Chain MCP Server
 
