@@ -3,16 +3,14 @@
  * All rights reserved.
  *
  * File: database.js
- * Description: Database operations for Thought Chain
+ * Description: Database operations for Thought Chain using sql.js
  */
 
-import Database from "better-sqlite3";
+import initSqlJs from "sql.js";
 import path from "path";
 import fs from "fs";
-import { fileURLToPath } from "url";
 import os from "os";
 import { validateThoughtChain } from "./models.js";
-import { constants } from "fs";
 
 /**
  * Get the database path for npx-compatible storage
@@ -40,30 +38,61 @@ function getDatabasePath() {
 const DB_PATH = getDatabasePath();
 
 /**
- * Database manager class for Thought Chain
+ * Database manager class for Thought Chain using sql.js
  */
 export class DatabaseManager {
   constructor(dbPath = DB_PATH) {
-    // Ensure the directory exists with secure permissions
-    const dbDir = path.dirname(dbPath);
-    if (!fs.existsSync(dbDir)) {
-      fs.mkdirSync(dbDir, { recursive: true, mode: 0o700 });
-    } else {
-      try {
-        fs.chmodSync(dbDir, 0o700);
-      } catch (error) {
-        console.warn("Could not set directory permissions:", error.message);
-      }
-    }
+    this.dbPath = dbPath;
+    this.SQL = null;
+    this.db = null;
+    this.initialized = false;
+  }
 
-    this.db = new Database(dbPath);
-    this.initDatabase();
+  /**
+   * Initialize the database with sql.js
+   */
+  async initialize() {
+    if (this.initialized) return;
 
-    // Set secure permissions on the database file
     try {
-      fs.chmodSync(dbPath, 0o600);
+      // Initialize sql.js
+      this.SQL = await initSqlJs();
+
+      // Ensure the directory exists with secure permissions
+      const dbDir = path.dirname(this.dbPath);
+      if (!fs.existsSync(dbDir)) {
+        fs.mkdirSync(dbDir, { recursive: true, mode: 0o700 });
+      } else {
+        try {
+          fs.chmodSync(dbDir, 0o700);
+        } catch (error) {
+          console.warn("Could not set directory permissions:", error.message);
+        }
+      }
+
+      // Load existing database or create new one
+      if (this.dbPath !== ':memory:' && fs.existsSync(this.dbPath)) {
+        const filebuffer = fs.readFileSync(this.dbPath);
+        this.db = new this.SQL.Database(new Uint8Array(filebuffer));
+      } else {
+        this.db = new this.SQL.Database();
+      }
+
+      this.initDatabase();
+
+      // Set secure permissions on the database file (skip for in-memory databases)
+      if (this.dbPath !== ':memory:') {
+        try {
+          fs.chmodSync(this.dbPath, 0o600);
+        } catch (error) {
+          console.warn("Could not set database file permissions:", error.message);
+        }
+      }
+
+      this.initialized = true;
     } catch (error) {
-      console.warn("Could not set database file permissions:", error.message);
+      console.error("Failed to initialize database:", error);
+      throw error;
     }
   }
 
@@ -123,27 +152,33 @@ export class DatabaseManager {
         ORDER BY created DESC
       `;
 
-      const chains = this.db.prepare(chainsQuery).all();
-
-      // Get steps for each chain
-      const stepsQuery = `
-        SELECT chain_id, step_number, thought, reflection, timestamp, is_conclusion
-        FROM thought_steps
-        WHERE chain_id = ?
-        ORDER BY step_number
-      `;
-
-      const stepsStmt = this.db.prepare(stepsQuery);
+      const chainsResult = this.db.exec(chainsQuery);
+      const chains = chainsResult.length > 0 ? chainsResult[0].values.map(row => {
+        const [id, created, updated, concluded, status] = row;
+        return { id, created, updated, concluded, status };
+      }) : [];
 
       return chains.map((chain) => {
-        const steps = stepsStmt.all(chain.id).map((step) => ({
-          id: step.step_number,
-          thought: step.thought,
-          reflection: step.reflection,
-          timestamp: step.timestamp,
-          is_conclusion: step.is_conclusion === 1,
-          builds_on: step.step_number > 1 ? [step.step_number - 1] : [],
-        }));
+        // Get steps for this chain
+        const stepsQuery = `
+          SELECT chain_id, step_number, thought, reflection, timestamp, is_conclusion
+          FROM thought_steps
+          WHERE chain_id = '${chain.id.replace(/'/g, "''")}'
+          ORDER BY step_number
+        `;
+
+        const stepsResult = this.db.exec(stepsQuery);
+        const steps = stepsResult.length > 0 ? stepsResult[0].values.map(row => {
+          const [chain_id, step_number, thought, reflection, timestamp, is_conclusion] = row;
+          return {
+            id: step_number,
+            thought: thought,
+            reflection: reflection,
+            timestamp: timestamp,
+            is_conclusion: is_conclusion === 1,
+            builds_on: step_number > 1 ? [step_number - 1] : [],
+          };
+        }) : [];
 
         return {
           id: chain.id,
@@ -170,46 +205,25 @@ export class DatabaseManager {
       validateThoughtChain(thoughtChain);
 
       // Insert or replace thought chain
-      const chainStmt = this.db.prepare(`
+      const chainQuery = `
         INSERT OR REPLACE INTO thought_chains (id, created, updated, concluded, status)
-        VALUES (?, ?, ?, ?, ?)
-      `);
-
-      chainStmt.run(
-        thoughtChain.id,
-        thoughtChain.created,
-        thoughtChain.updated || null,
-        thoughtChain.concluded || null,
-        thoughtChain.status,
-      );
+        VALUES ('${thoughtChain.id.replace(/'/g, "''")}', '${thoughtChain.created}', ${thoughtChain.updated ? `'${thoughtChain.updated}'` : 'NULL'}, ${thoughtChain.concluded ? `'${thoughtChain.concluded}'` : 'NULL'}, '${thoughtChain.status}')
+      `;
+      this.db.exec(chainQuery);
 
       // Delete existing steps for this chain
-      const deleteStmt = this.db.prepare(
-        "DELETE FROM thought_steps WHERE chain_id = ?",
-      );
-      deleteStmt.run(thoughtChain.id);
+      const deleteQuery = `DELETE FROM thought_steps WHERE chain_id = '${thoughtChain.id.replace(/'/g, "''")}'`;
+      this.db.exec(deleteQuery);
 
       // Insert all steps
       if (thoughtChain.steps.length > 0) {
-        const stepStmt = this.db.prepare(`
-          INSERT INTO thought_steps (chain_id, step_number, thought, reflection, timestamp, is_conclusion)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `);
-
-        const insertTransaction = this.db.transaction(() => {
-          thoughtChain.steps.forEach((step) => {
-            stepStmt.run(
-              thoughtChain.id,
-              step.id,
-              step.thought,
-              step.reflection || null,
-              step.timestamp,
-              step.is_conclusion ? 1 : 0,
-            );
-          });
+        thoughtChain.steps.forEach((step) => {
+          const stepQuery = `
+            INSERT INTO thought_steps (chain_id, step_number, thought, reflection, timestamp, is_conclusion)
+            VALUES ('${thoughtChain.id.replace(/'/g, "''")}', ${step.id}, '${step.thought.replace(/'/g, "''")}', ${step.reflection ? `'${step.reflection.replace(/'/g, "''")}'` : 'NULL'}, '${step.timestamp}', ${step.is_conclusion ? 1 : 0})
+          `;
+          this.db.exec(stepQuery);
         });
-
-        insertTransaction();
       }
     } catch (error) {
       console.error("Failed to save thought chain:", error);
@@ -227,32 +241,36 @@ export class DatabaseManager {
       const chainQuery = `
         SELECT id, created, updated, concluded, status
         FROM thought_chains
-        WHERE id = ?
+        WHERE id = '${chainId.replace(/'/g, "''")}'
       `;
 
-      const chain = this.db.prepare(chainQuery).get(chainId);
-      if (!chain) {
+      const chainResult = this.db.exec(chainQuery);
+      if (chainResult.length === 0 || chainResult[0].values.length === 0) {
         return null;
       }
+
+      const [id, created, updated, concluded, status] = chainResult[0].values[0];
+      const chain = { id, created, updated, concluded, status };
 
       const stepsQuery = `
         SELECT chain_id, step_number, thought, reflection, timestamp, is_conclusion
         FROM thought_steps
-        WHERE chain_id = ?
+        WHERE chain_id = '${chainId.replace(/'/g, "''")}'
         ORDER BY step_number
       `;
 
-      const steps = this.db
-        .prepare(stepsQuery)
-        .all(chainId)
-        .map((step) => ({
-          id: step.step_number,
-          thought: step.thought,
-          reflection: step.reflection,
-          timestamp: step.timestamp,
-          is_conclusion: step.is_conclusion === 1,
-          builds_on: step.step_number > 1 ? [step.step_number - 1] : [],
-        }));
+      const stepsResult = this.db.exec(stepsQuery);
+      const steps = stepsResult.length > 0 ? stepsResult[0].values.map(row => {
+        const [chain_id, step_number, thought, reflection, timestamp, is_conclusion] = row;
+        return {
+          id: step_number,
+          thought: thought,
+          reflection: reflection,
+          timestamp: timestamp,
+          is_conclusion: is_conclusion === 1,
+          builds_on: step_number > 1 ? [step_number - 1] : [],
+        };
+      }) : [];
 
       return {
         id: chain.id,
@@ -315,15 +333,31 @@ export class DatabaseManager {
         LIMIT 1
       `;
 
-      const chain = this.db.prepare(query).get();
-      if (!chain) {
+      const chainResult = this.db.exec(query);
+      if (chainResult.length === 0 || chainResult[0].values.length === 0) {
         return null;
       }
 
-      return this.getThoughtChain(chain.id);
+      const [id] = chainResult[0].values[0];
+      return this.getThoughtChain(id);
     } catch (error) {
       console.error("Failed to get most recent active chain:", error);
       return null;
+    }
+  }
+
+  /**
+   * Save the database to disk
+   */
+  saveToDisk() {
+    if (this.dbPath === ':memory:') return; // Skip for in-memory databases
+
+    try {
+      const data = this.db.export();
+      const buffer = Buffer.from(data);
+      fs.writeFileSync(this.dbPath, buffer);
+    } catch (error) {
+      console.error("Failed to save database to disk:", error);
     }
   }
 
@@ -332,6 +366,8 @@ export class DatabaseManager {
    */
   close() {
     try {
+      // Save to disk before closing (for persistent databases)
+      this.saveToDisk();
       this.db.close();
     } catch (error) {
       console.error("Failed to close database:", error);
@@ -344,22 +380,19 @@ export class DatabaseManager {
    */
   getStats() {
     try {
-      const chainCount = this.db
-        .prepare("SELECT COUNT(*) as count FROM thought_chains")
-        .get();
-      const stepCount = this.db
-        .prepare("SELECT COUNT(*) as count FROM thought_steps")
-        .get();
-      const activeCount = this.db
-        .prepare(
-          "SELECT COUNT(*) as count FROM thought_chains WHERE status = 'active'",
-        )
-        .get();
+      const chainResult = this.db.exec("SELECT COUNT(*) as count FROM thought_chains");
+      const chainCount = chainResult.length > 0 ? chainResult[0].values[0][0] : 0;
+
+      const stepResult = this.db.exec("SELECT COUNT(*) as count FROM thought_steps");
+      const stepCount = stepResult.length > 0 ? stepResult[0].values[0][0] : 0;
+
+      const activeResult = this.db.exec("SELECT COUNT(*) as count FROM thought_chains WHERE status = 'active'");
+      const activeCount = activeResult.length > 0 ? activeResult[0].values[0][0] : 0;
 
       return {
-        totalChains: chainCount.count,
-        totalSteps: stepCount.count,
-        activeChains: activeCount.count,
+        totalChains: chainCount,
+        totalSteps: stepCount,
+        activeChains: activeCount,
         databasePath: DB_PATH,
       };
     } catch (error) {

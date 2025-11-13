@@ -148,15 +148,16 @@ export async function handleSequentialThink(args, currentChain, database = dbMan
 /**
  * Handles recall_thoughts tool requests
  * @param {Object} args - Tool arguments
+ * @param {DatabaseManager} database - Database manager instance (optional, defaults to dbManager)
  * @returns {Object} Response object
  */
-export async function handleRecallThoughts(args) {
+export async function handleRecallThoughts(args, database = dbManager) {
   try {
     // Validate arguments
     validateToolArguments('recall_thoughts', args);
 
     const { query = "", limit = 5 } = args;
-    const savedThoughts = dbManager.searchThoughtChains(query, limit);
+    const savedThoughts = database.searchThoughtChains(query, limit);
 
     if (savedThoughts.length === 0) {
       return {
@@ -208,23 +209,24 @@ export async function handleRecallThoughts(args) {
 /**
  * Handles load_thought_chain tool requests
  * @param {Object} args - Tool arguments
+ * @param {DatabaseManager} database - Database manager instance (optional, defaults to dbManager)
  * @returns {Object} Response object
  */
-export async function handleLoadThoughtChain(args) {
+export async function handleLoadThoughtChain(args, database = dbManager) {
   try {
     // Validate arguments
     validateToolArguments('load_thought_chain', args);
 
     const { chain_id } = args;
-    const chain = dbManager.getThoughtChain(chain_id);
-    
+    const chain = database.getThoughtChain(chain_id);
+
     if (!chain) {
       throw new Error(`Thought chain with ID ${chain_id} not found`);
     }
 
     // Reactivate the chain for continued work
     chain.status = "active";
-    dbManager.saveThought(chain);
+    database.saveThought(chain);
     
     let response = `📂 **Loaded thought chain** (ID: ${chain.id})\n`;
     response += `*Originally created: ${new Date(chain.created).toLocaleString()}*\n`;
@@ -256,11 +258,12 @@ export async function handleLoadThoughtChain(args) {
 
 /**
  * Handles database statistics requests
+ * @param {DatabaseManager} database - Database manager instance (optional, defaults to dbManager)
  * @returns {Object} Response object with database stats
  */
-export async function handleGetStats() {
+export async function handleGetStats(database = dbManager) {
   try {
-    const stats = dbManager.getStats();
+    const stats = database.getStats();
     
     if (!stats) {
       throw new Error("Failed to retrieve database statistics");

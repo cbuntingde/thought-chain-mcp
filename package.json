@@ -16,7 +16,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@vscode/webview-ui-toolkit": "^1.4.0",
-    "better-sqlite3": "^12.4.1"
+    "sql.js": "^1.8.0"
   },
   "bin": {
     "thought-chain-mcp": "index.js",

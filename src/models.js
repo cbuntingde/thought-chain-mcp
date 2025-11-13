@@ -157,6 +157,23 @@ export function validateToolArguments(toolName, args) {
         if (searchPatterns.test(args.query)) {
           throw new Error("Query contains invalid characters");
         }
+
+        // Also check for control characters
+        const controlCharacters = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g;
+        if (controlCharacters.test(args.query)) {
+          throw new Error("Query contains invalid characters");
+        }
+
+        // Check for SQL injection patterns
+        const sqlPatterns = /['";\\]|--+|\/\*|\*\//i;
+        if (sqlPatterns.test(args.query)) {
+          throw new Error("Query contains invalid characters");
+        }
+
+        // Prevent path traversal attempts
+        if (args.query.includes("..") || args.query.includes("/")) {
+          throw new Error("Query contains invalid path sequences");
+        }
       }
 
       if (

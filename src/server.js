@@ -206,11 +206,11 @@ export class ThoughtChainServer {
       try {
         switch (name) {
           case "thought_chain":
-            return await handleSequentialThink(args, this.currentThoughtChain);
+            return await handleSequentialThink(args, this.currentThoughtChain, dbManager);
           case "recall_thoughts":
-            return await handleRecallThoughts(args);
+            return await handleRecallThoughts(args, dbManager);
           case "load_thought_chain":
-            const result = await handleLoadThoughtChain(args);
+            const result = await handleLoadThoughtChain(args, dbManager);
             // Update current chain when loading
             const loadedChain = dbManager.getThoughtChain(args.chain_id);
             if (loadedChain) {
@@ -218,7 +218,7 @@ export class ThoughtChainServer {
             }
             return result;
           case "get_stats":
-            return await handleGetStats();
+            return await handleGetStats(dbManager);
           default:
             throw new Error(`Unknown tool: ${name}`);
         }
@@ -233,6 +233,9 @@ export class ThoughtChainServer {
    */
   async initialize() {
     try {
+      // Initialize the database
+      await dbManager.initialize();
+
       // Load the most recent active thought chain if it exists
       const activeChain = dbManager.getMostRecentActiveChain();
       if (activeChain) {
