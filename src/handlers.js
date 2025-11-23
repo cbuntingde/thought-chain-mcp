@@ -140,7 +140,10 @@ export async function handleSequentialThink(args, currentChain, database = dbMan
         throw new Error(`Unknown action: ${action}`);
     }
   } catch (error) {
-    console.error("Error in handleSequentialThink:", error);
+    // Only log errors in production, not during testing
+    if (process.env.NODE_ENV !== 'test') {
+      console.error("Error in handleSequentialThink:", error);
+    }
     throw error;
   }
 }
@@ -201,7 +204,10 @@ export async function handleRecallThoughts(args, database = dbManager) {
       ]
     };
   } catch (error) {
-    console.error("Error in handleRecallThoughts:", error);
+    // Only log errors in production, not during testing
+    if (process.env.NODE_ENV !== 'test') {
+      console.error("Error in handleRecallThoughts:", error);
+    }
     throw error;
   }
 }
@@ -251,7 +257,10 @@ export async function handleLoadThoughtChain(args, database = dbManager) {
       ]
     };
   } catch (error) {
-    console.error("Error in handleLoadThoughtChain:", error);
+    // Only log errors in production, not during testing
+    if (process.env.NODE_ENV !== 'test') {
+      console.error("Error in handleLoadThoughtChain:", error);
+    }
     throw error;
   }
 }
@@ -284,7 +293,10 @@ export async function handleGetStats(database = dbManager) {
       ]
     };
   } catch (error) {
-    console.error("Error in handleGetStats:", error);
+    // Only log errors in production, not during testing
+    if (process.env.NODE_ENV !== 'test') {
+      console.error("Error in handleGetStats:", error);
+    }
     throw error;
   }
 }

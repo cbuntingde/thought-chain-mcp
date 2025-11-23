@@ -13,6 +13,9 @@ import { validateToolArguments, createThoughtChain, createThoughtStep, generateI
 import { DatabaseManager } from '../src/database.js';
 import { handleSequentialThink, handleRecallThoughts, handleLoadThoughtChain, handleGetStats } from '../src/handlers.js';
 
+// Set test environment to suppress error logging during tests
+process.env.NODE_ENV = 'test';
+
 describe('Thought Chain Server Tests', () => {
   let server;
   let testDb;
