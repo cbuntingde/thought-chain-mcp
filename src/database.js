@@ -13,26 +13,73 @@ import os from "os";
 import { validateThoughtChain } from "./models.js";
 
 /**
- * Get the database path for npx-compatible storage
+ * Get the application data directory based on the platform
+ * @returns {string} Path to the application data directory
+ */
+function getAppDataDir() {
+  const platform = process.platform;
+  const homedir = os.homedir();
+
+  if (platform === 'win32') {
+    return process.env.APPDATA || path.join(homedir, 'AppData', 'Roaming');
+  } else if (platform === 'darwin') {
+    return path.join(homedir, 'Library', 'Application Support');
+  } else {
+    return process.env.XDG_CONFIG_HOME || path.join(homedir, '.config');
+  }
+}
+
+/**
+ * Get the database path for npx-compatible storage with cross-platform support
  * @returns {string} Path to the database file
  */
 function getDatabasePath() {
-  const homeDir = os.homedir();
-  const appDataDir = path.join(homeDir, ".thought-chain-mcp");
+  const appDataDir = path.join(getAppDataDir(), "thought-chain-mcp");
+  const dbPath = path.join(appDataDir, "thoughts.db");
 
-  // Ensure the directory exists with secure permissions
-  if (!fs.existsSync(appDataDir)) {
-    fs.mkdirSync(appDataDir, { recursive: true, mode: 0o700 });
-  } else {
-    // Ensure existing directory has secure permissions
+  // Legacy path check (migration)
+  const legacyDir = path.join(os.homedir(), ".thought-chain-mcp");
+  const legacyDbPath = path.join(legacyDir, "thoughts.db");
+
+  // If legacy DB exists and new one doesn't, migrate
+  if (fs.existsSync(legacyDbPath) && !fs.existsSync(dbPath)) {
     try {
-      fs.chmodSync(appDataDir, 0o700);
+      // Ensure new directory exists
+      if (!fs.existsSync(appDataDir)) {
+        fs.mkdirSync(appDataDir, { recursive: true, mode: 0o700 });
+      }
+
+      // Copy file
+      fs.copyFileSync(legacyDbPath, dbPath);
+      console.error(`Migrated database from ${legacyDbPath} to ${dbPath}`);
     } catch (error) {
-      console.warn("Could not set directory permissions:", error.message);
+      console.warn(`Failed to migrate database: ${error.message}. Falling back to legacy path.`);
+      return legacyDbPath;
     }
   }
 
-  return path.join(appDataDir, "thoughts.db");
+  // Ensure the directory exists
+  if (!fs.existsSync(appDataDir)) {
+    try {
+      fs.mkdirSync(appDataDir, { recursive: true, mode: 0o700 });
+    } catch (error) {
+      // Fallback to legacy if we can't create the standard one
+      console.warn(`Failed to create app data dir: ${error.message}. Using legacy path.`);
+      if (!fs.existsSync(legacyDir)) {
+        fs.mkdirSync(legacyDir, { recursive: true, mode: 0o700 });
+      }
+      return legacyDbPath;
+    }
+  } else {
+    // Ensure existing directory has secure permissions (best effort)
+    try {
+      fs.chmodSync(appDataDir, 0o700);
+    } catch (error) {
+      // Ignore chmod errors on Windows or if not owned
+    }
+  }
+
+  return dbPath;
 }
 
 const DB_PATH = getDatabasePath();
@@ -58,16 +105,10 @@ export class DatabaseManager {
       // Initialize sql.js
       this.SQL = await initSqlJs();
 
-      // Ensure the directory exists with secure permissions
+      // Ensure the directory exists (redundant check but safe)
       const dbDir = path.dirname(this.dbPath);
       if (!fs.existsSync(dbDir)) {
         fs.mkdirSync(dbDir, { recursive: true, mode: 0o700 });
-      } else {
-        try {
-          fs.chmodSync(dbDir, 0o700);
-        } catch (error) {
-          console.warn("Could not set directory permissions:", error.message);
-        }
       }
 
       // Load existing database or create new one
@@ -80,12 +121,14 @@ export class DatabaseManager {
 
       this.initDatabase();
 
-      // Set secure permissions on the database file (skip for in-memory databases)
+      // Save to disk to ensure file exists and persist initial schema
       if (this.dbPath !== ':memory:') {
+        this.saveToDisk();
+
         try {
           fs.chmodSync(this.dbPath, 0o600);
         } catch (error) {
-          console.warn("Could not set database file permissions:", error.message);
+          // Ignore chmod errors on Windows
         }
       }
 
@@ -146,39 +189,36 @@ export class DatabaseManager {
   loadSavedThoughts() {
     try {
       // Get all thought chains
-      const chainsQuery = `
-        SELECT id, created, updated, concluded, status
-        FROM thought_chains
-        ORDER BY created DESC
-      `;
-
-      const chainsResult = this.db.exec(chainsQuery);
-      const chains = chainsResult.length > 0 ? chainsResult[0].values.map(row => {
-        const [id, created, updated, concluded, status] = row;
-        return { id, created, updated, concluded, status };
-      }) : [];
+      const chainsStmt = this.db.prepare("SELECT id, created, updated, concluded, status FROM thought_chains ORDER BY created DESC");
+      const chains = [];
+      while (chainsStmt.step()) {
+        chains.push(chainsStmt.getAsObject());
+      }
+      chainsStmt.free();
 
       return chains.map((chain) => {
         // Get steps for this chain
-        const stepsQuery = `
+        const stepsStmt = this.db.prepare(`
           SELECT chain_id, step_number, thought, reflection, timestamp, is_conclusion
           FROM thought_steps
-          WHERE chain_id = '${chain.id.replace(/'/g, "''")}'
+          WHERE chain_id = ?
           ORDER BY step_number
-        `;
+        `);
+        stepsStmt.bind([chain.id]);
 
-        const stepsResult = this.db.exec(stepsQuery);
-        const steps = stepsResult.length > 0 ? stepsResult[0].values.map(row => {
-          const [chain_id, step_number, thought, reflection, timestamp, is_conclusion] = row;
-          return {
-            id: step_number,
-            thought: thought,
-            reflection: reflection,
-            timestamp: timestamp,
-            is_conclusion: is_conclusion === 1,
-            builds_on: step_number > 1 ? [step_number - 1] : [],
-          };
-        }) : [];
+        const steps = [];
+        while (stepsStmt.step()) {
+          const row = stepsStmt.getAsObject();
+          steps.push({
+            id: row.step_number,
+            thought: row.thought,
+            reflection: row.reflection,
+            timestamp: row.timestamp,
+            is_conclusion: row.is_conclusion === 1,
+            builds_on: row.step_number > 1 ? [row.step_number - 1] : [],
+          });
+        }
+        stepsStmt.free();
 
         return {
           id: chain.id,
@@ -205,26 +245,46 @@ export class DatabaseManager {
       validateThoughtChain(thoughtChain);
 
       // Insert or replace thought chain
-      const chainQuery = `
+      const chainStmt = this.db.prepare(`
         INSERT OR REPLACE INTO thought_chains (id, created, updated, concluded, status)
-        VALUES ('${thoughtChain.id.replace(/'/g, "''")}', '${thoughtChain.created}', ${thoughtChain.updated ? `'${thoughtChain.updated}'` : 'NULL'}, ${thoughtChain.concluded ? `'${thoughtChain.concluded}'` : 'NULL'}, '${thoughtChain.status}')
-      `;
-      this.db.exec(chainQuery);
+        VALUES (?, ?, ?, ?, ?)
+      `);
+
+      chainStmt.run([
+        thoughtChain.id,
+        thoughtChain.created,
+        thoughtChain.updated,
+        thoughtChain.concluded,
+        thoughtChain.status
+      ]);
+      chainStmt.free();
 
       // Delete existing steps for this chain
-      const deleteQuery = `DELETE FROM thought_steps WHERE chain_id = '${thoughtChain.id.replace(/'/g, "''")}'`;
-      this.db.exec(deleteQuery);
+      const deleteStmt = this.db.prepare("DELETE FROM thought_steps WHERE chain_id = ?");
+      deleteStmt.run([thoughtChain.id]);
+      deleteStmt.free();
 
       // Insert all steps
       if (thoughtChain.steps.length > 0) {
+        const stepStmt = this.db.prepare(`
+          INSERT INTO thought_steps (chain_id, step_number, thought, reflection, timestamp, is_conclusion)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `);
+
         thoughtChain.steps.forEach((step) => {
-          const stepQuery = `
-            INSERT INTO thought_steps (chain_id, step_number, thought, reflection, timestamp, is_conclusion)
-            VALUES ('${thoughtChain.id.replace(/'/g, "''")}', ${step.id}, '${step.thought.replace(/'/g, "''")}', ${step.reflection ? `'${step.reflection.replace(/'/g, "''")}'` : 'NULL'}, '${step.timestamp}', ${step.is_conclusion ? 1 : 0})
-          `;
-          this.db.exec(stepQuery);
+          stepStmt.run([
+            thoughtChain.id,
+            step.id,
+            step.thought,
+            step.reflection,
+            step.timestamp,
+            step.is_conclusion ? 1 : 0
+          ]);
         });
+        stepStmt.free();
       }
+
+      this.saveToDisk();
     } catch (error) {
       console.error("Failed to save thought chain:", error);
       throw error;
@@ -238,46 +298,42 @@ export class DatabaseManager {
    */
   getThoughtChain(chainId) {
     try {
-      const chainQuery = `
-        SELECT id, created, updated, concluded, status
-        FROM thought_chains
-        WHERE id = '${chainId.replace(/'/g, "''")}'
-      `;
+      const chainStmt = this.db.prepare("SELECT * FROM thought_chains WHERE id = ?");
+      const chainResult = chainStmt.getAsObject([chainId]);
+      chainStmt.free();
 
-      const chainResult = this.db.exec(chainQuery);
-      if (chainResult.length === 0 || chainResult[0].values.length === 0) {
+      if (!chainResult || !chainResult.id) {
         return null;
       }
 
-      const [id, created, updated, concluded, status] = chainResult[0].values[0];
-      const chain = { id, created, updated, concluded, status };
-
-      const stepsQuery = `
+      const stepsStmt = this.db.prepare(`
         SELECT chain_id, step_number, thought, reflection, timestamp, is_conclusion
         FROM thought_steps
-        WHERE chain_id = '${chainId.replace(/'/g, "''")}'
+        WHERE chain_id = ?
         ORDER BY step_number
-      `;
+      `);
+      stepsStmt.bind([chainId]);
 
-      const stepsResult = this.db.exec(stepsQuery);
-      const steps = stepsResult.length > 0 ? stepsResult[0].values.map(row => {
-        const [chain_id, step_number, thought, reflection, timestamp, is_conclusion] = row;
-        return {
-          id: step_number,
-          thought: thought,
-          reflection: reflection,
-          timestamp: timestamp,
-          is_conclusion: is_conclusion === 1,
-          builds_on: step_number > 1 ? [step_number - 1] : [],
-        };
-      }) : [];
+      const steps = [];
+      while (stepsStmt.step()) {
+        const row = stepsStmt.getAsObject();
+        steps.push({
+          id: row.step_number,
+          thought: row.thought,
+          reflection: row.reflection,
+          timestamp: row.timestamp,
+          is_conclusion: row.is_conclusion === 1,
+          builds_on: row.step_number > 1 ? [row.step_number - 1] : [],
+        });
+      }
+      stepsStmt.free();
 
       return {
-        id: chain.id,
-        created: chain.created,
-        updated: chain.updated,
-        concluded: chain.concluded,
-        status: chain.status,
+        id: chainResult.id,
+        created: chainResult.created,
+        updated: chainResult.updated,
+        concluded: chainResult.concluded,
+        status: chainResult.status,
         steps: steps,
       };
     } catch (error) {
@@ -325,20 +381,14 @@ export class DatabaseManager {
    */
   getMostRecentActiveChain() {
     try {
-      const query = `
-        SELECT id, created, updated, concluded, status
-        FROM thought_chains
-        WHERE status = 'active'
-        ORDER BY created DESC
-        LIMIT 1
-      `;
-
-      const chainResult = this.db.exec(query);
-      if (chainResult.length === 0 || chainResult[0].values.length === 0) {
-        return null;
+      const stmt = this.db.prepare("SELECT id FROM thought_chains WHERE status = 'active' ORDER BY created DESC LIMIT 1");
+      let id = null;
+      if (stmt.step()) {
+        id = stmt.getAsObject().id;
       }
+      stmt.free();
 
-      const [id] = chainResult[0].values[0];
+      if (!id) return null;
       return this.getThoughtChain(id);
     } catch (error) {
       console.error("Failed to get most recent active chain:", error);
@@ -380,14 +430,20 @@ export class DatabaseManager {
    */
   getStats() {
     try {
-      const chainResult = this.db.exec("SELECT COUNT(*) as count FROM thought_chains");
-      const chainCount = chainResult.length > 0 ? chainResult[0].values[0][0] : 0;
+      const chainStmt = this.db.prepare("SELECT COUNT(*) as count FROM thought_chains");
+      let chainCount = 0;
+      if (chainStmt.step()) chainCount = chainStmt.getAsObject().count;
+      chainStmt.free();
 
-      const stepResult = this.db.exec("SELECT COUNT(*) as count FROM thought_steps");
-      const stepCount = stepResult.length > 0 ? stepResult[0].values[0][0] : 0;
+      const stepStmt = this.db.prepare("SELECT COUNT(*) as count FROM thought_steps");
+      let stepCount = 0;
+      if (stepStmt.step()) stepCount = stepStmt.getAsObject().count;
+      stepStmt.free();
 
-      const activeResult = this.db.exec("SELECT COUNT(*) as count FROM thought_chains WHERE status = 'active'");
-      const activeCount = activeResult.length > 0 ? activeResult[0].values[0][0] : 0;
+      const activeStmt = this.db.prepare("SELECT COUNT(*) as count FROM thought_chains WHERE status = 'active'");
+      let activeCount = 0;
+      if (activeStmt.step()) activeCount = activeStmt.getAsObject().count;
+      activeStmt.free();
 
       return {
         totalChains: chainCount,

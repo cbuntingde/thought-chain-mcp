@@ -596,7 +596,13 @@ This project follows established coding standards. When contributing:
 
 ## Version History
 
-### v1.0.2 (Current)
+### v1.1.4 (Current)
+- Improved database handling with better sql.js integration
+- Enhanced cross-platform support
+- Updated dependencies
+- Refined error handling and logging
+
+### v1.0.2
 - Renamed `sequential_think` tool to `thought_chain` for clarity
 - Enhanced security validation with improved XSS prevention
 - Fixed duplicate configuration issues
