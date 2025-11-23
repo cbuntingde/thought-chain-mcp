@@ -68,7 +68,9 @@ export function validateToolArguments(toolName, args) {
       // Enhanced XSS prevention patterns
       const dangerousPatterns =
         /<script|javascript:|on\w+=|data:text|vbscript:/i;
-      const injectionPatterns = /['";\\]|--+|\/\*|\*\//i;
+      // More precise SQL injection patterns - requires actual injection context
+      // Matches: ' OR 1=1, " OR '1'='1, '; DROP TABLE, ' UNION SELECT, etc.
+      const injectionPatterns = /(?:['"]\s*(?:OR|AND)\s+(?:[0-9]+\s*[=<>]|['"'][^'"]*['"']\s*[=<>]))|(?:['"];\s*(?:DROP|DELETE|UPDATE|INSERT|CREATE|ALTER|EXEC(?:UTE)?)\s+)|(?:['"]\s*UNION\s+(?:ALL\s+)?SELECT\s+)|(?:--[\s\S]*$)|(?:\/\*[\s\S]*?\*\/)/i;
       const controlCharacters = /[\x00-\x1F\x7F]/g;
 
       if (!args.action || typeof args.action !== "string") {
@@ -153,9 +155,10 @@ export function validateToolArguments(toolName, args) {
 
       // Validate query for dangerous patterns
       if (args.query) {
-        const searchPatterns = /[<>'"\\]/;
+        // More precise search patterns that require context
+        const searchPatterns = /(?:<script|javascript:|on\w+=|data:text|vbscript:)/i;
         if (searchPatterns.test(args.query)) {
-          throw new Error("Query contains invalid characters");
+          throw new Error("Query contains potentially dangerous content");
         }
 
         // Also check for control characters
@@ -164,10 +167,11 @@ export function validateToolArguments(toolName, args) {
           throw new Error("Query contains invalid characters");
         }
 
-        // Check for SQL injection patterns
-        const sqlPatterns = /['";\\]|--+|\/\*|\*\//i;
+        // Check for SQL injection patterns with more precise context
+        // Matches: ' OR 1=1, " OR '1'='1, '; DROP TABLE, ' UNION SELECT, etc.
+        const sqlPatterns = /(?:['"]\s*(?:OR|AND)\s+(?:[0-9]+\s*[=<>]|['"'][^'"]*['"']\s*[=<>]))|(?:['"];\s*(?:DROP|DELETE|UPDATE|INSERT|CREATE|ALTER|EXEC(?:UTE)?)\s+)|(?:['"]\s*UNION\s+(?:ALL\s+)?SELECT\s+)|(?:--[\s\S]*$)|(?:\/\*[\s\S]*?\*\/)/i;
         if (sqlPatterns.test(args.query)) {
-          throw new Error("Query contains invalid characters");
+          throw new Error("Query contains potentially dangerous patterns");
         }
 
         // Prevent path traversal attempts
